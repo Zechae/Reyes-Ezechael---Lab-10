@@ -1,0 +1,139 @@
+import { Effect, Match, String, Array } from "effect"
+import { h, startSimple } from "cs12242-mvu/src"
+
+const API = "https://pokeapi.upd-dcs.work/api/v2"
+
+type State =
+  | { tag: "Idle"; name: string }
+  | { tag: "Loading"; name: string }
+  | { tag: "Success"; name: string; data: any[] }
+  | { tag: "Error"; name: string }
+
+const Model = {
+  state: { tag: "Idle", name: "" } as State,
+}
+
+const Msg = {
+  Input: (value: string) => ({ tag: "Input", value } as const),
+  Submit: {} as const,
+  Success: (data: any[]) => ({ tag: "Success", data } as const),
+  Error: {} as const,
+}
+
+type Msg = ReturnType<(typeof Msg)[keyof typeof Msg]>
+
+const update = (msg: Msg, model: typeof Model) =>
+  Match.value(msg).pipe(
+    Match.tags({
+      Input: ({ value }) => ({
+        state: { tag: "Idle", name: value },
+      }),
+      Submit: () => ({
+        state: { tag: "Loading", name: model.state.name },
+      }),
+      Success: ({ data }) => ({
+        state: { tag: "Success", name: model.state.name, data },
+      }),
+      Error: () => ({
+        state: { tag: "Error", name: model.state.name },
+      }),
+    }),
+    Match.exhaustive,
+  )
+
+const view = (model: typeof Model, dispatch: (msg: Msg) => void) => {
+  const s = model.state
+  return h("div", [
+    h("input", {
+      type: "text",
+      value: s.name,
+      on: {
+        input: (e) =>
+          dispatch(Msg.Input((e.target as HTMLInputElement).value)),
+      },
+    }),
+    h("button", {
+      on: {
+        click: () => dispatch(Msg.Submit),
+      },
+    }, "Search"),
+    ...(s.tag === "Loading"
+      ? [h("p", "Loading...")]
+      : s.tag === "Error"
+      ? [h("p", "Failed to fetch data")]
+      : s.tag === "Success"
+      ? [
+          h("div", {
+            style: {
+              display: "grid",
+              gridTemplateColumns: "auto auto auto",
+              gap: "1em",
+            },
+          }, s.data.map((p) =>
+            h("div", {
+              style: {
+                display: "flex",
+                alignItems: "center",
+                gap: "1em",
+              },
+            }, [
+              h("img", { src: p.sprite, alt: `${p.name} sprite` }),
+              h("div", [
+                h("h1", p.name),
+                h("p", [
+                  h("strong", "Types: "),
+                  ...p.types.map((t: string, i: number) =>
+                    h("code", {}, t + (i < p.types.length - 1 ? " | " : ""))
+                  ),
+                ]),
+                h("p", [h("strong", "Height: "), `${p.height} m`]),
+                h("p", [h("strong", "Weight: "), `${p.weight} kg`]),
+              ]),
+            ])
+          )),
+        ]
+      : []),
+  ])
+}
+
+const prettyPokemon = (data: any) => ({
+  id: data.id,
+  name: data.name,
+  sprite: data.sprites.front_default,
+  types: Array.fromIterable(data.types).map((t) => t.type.name),
+  height: data.height / 10,
+  weight: data.weight / 10,
+})
+
+const effect = (msg: Msg, model: typeof Model) =>
+  msg.tag === "Submit"
+    ? Effect.tryPromise({
+        try: async () => {
+          const res = await fetch(`${API}/generation/1`)
+          if (!res.ok) throw new Error("Failed to load generation")
+          const gen = await res.json()
+          const filtered = gen.pokemon_species
+            .map((s: any) => s.name)
+            .filter((name: string) =>
+              name.startsWith(String.toLowerCase(model.state.name))
+            )
+          const results = await Promise.all(
+            filtered.map((name: string) =>
+              fetch(`${API}/pokemon/${name}`)
+                .then((res) => {
+                  if (!res.ok) throw new Error("Failed to load pokemon")
+                  return res.json()
+                })
+                .then(prettyPokemon)
+            )
+          )
+          return results.sort((a, b) => a.id - b.id)
+        },
+        catch: () => Msg.Error,
+      }).map(Msg.Success)
+    : Effect.none()
+
+const root = document.getElementById("app")!
+
+startSimple(root, Model, update, view, effect)
+

@@ -1,0 +1,87 @@
+import { Effect, Match, Option, String, Array } from "effect"
+import { h, startSimple } from "cs12242-mvu/src"
+
+const API = "https://pokeapi.upd-dcs.work/api/v2"
+
+type State =
+  | { tag: "Idle"; name: string }
+  | { tag: "Loading"; name: string }
+  | { tag: "Success"; name: string; data: unknown }
+  | { tag: "Error"; name: string }
+
+const Model = {
+  state: { tag: "Idle", name: "" } as State,
+}
+
+const Msg = {
+  Input: (value: string) => ({ tag: "Input", value } as const),
+  Submit: {} as const,
+  Success: (data: unknown) => ({ tag: "Success", data } as const),
+  Error: {} as const,
+}
+
+type Msg = ReturnType<(typeof Msg)[keyof typeof Msg]>
+
+const update = (msg: Msg, model: typeof Model) =>
+  Match.value(msg).pipe(
+    Match.tags({
+      Input: ({ value }) => ({
+        state: { tag: "Idle", name: value },
+      }),
+      Submit: () => ({
+        state: { tag: "Loading", name: model.state.name },
+      }),
+      Success: ({ data }) => ({
+        state: { tag: "Success", name: model.state.name, data },
+      }),
+      Error: () => ({
+        state: { tag: "Error", name: model.state.name },
+      }),
+    }),
+    Match.exhaustive,
+  )
+
+const view = (model: typeof Model, dispatch: (msg: Msg) => void) => {
+  const s = model.state
+  return h("div", [
+    h("input", {
+      type: "text",
+      value: s.name,
+      on: {
+        input: (e) =>
+          dispatch(Msg.Input((e.target as HTMLInputElement).value)),
+      },
+    }),
+    h("button", {
+      on: {
+        click: () => dispatch(Msg.Submit),
+      },
+    }, "Search"),
+    ...(
+      s.tag === "Loading" ? [h("p", "Loading...")] :
+      s.tag === "Error" ? [h("p", "Failed to fetch data")] :
+      s.tag === "Success" ? [h("pre", JSON.stringify(prettyPokemon(s.data), null, 2))] :
+      []
+    )
+  ])
+}
+
+const prettyPokemon = (data: any) => ({
+  name: data.name,
+  types: Array.fromIterable(data.types).map((t) => t.type.name),
+  height: data.height,
+  weight: data.weight,
+})
+
+const effect = (msg: Msg, model: typeof Model) =>
+  msg.tag === "Submit"
+    ? Effect.tryPromise({
+        try: () =>
+          fetch(`${API}/pokemon/${String.toLowerCase(model.state.name)}`).then((res) => res.json()),
+        catch: () => Msg.Error,
+      }).map(Msg.Success)
+    : Effect.none()
+
+const root = document.getElementById("app")!
+
+startSimple(root, Model, update, view, effect
